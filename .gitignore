@@ -1,0 +1,41 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment and virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Audio files (they can be large and regenerated)
+static/audio/*.mp3
+
+# Local data files
+farmers.json
+notices.json
+last_scrape.json
+
+# Logs
+*.log
+
+# ngrok
+*.ngrok.io
+.ngrok/
+
+# Credentials (IMPORTANT: don't commit these!)
+.env
+credentials.json
+config.ini
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo

@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AGRIVOICE</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1, h2 {
+            color: #2c5e1a;
+        }
+        form {
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .phone-input {
+            display: flex;
+            align-items: center;
+        }
+        .country-code {
+            flex: 0 0 60px;
+            margin-right: 10px;
+            background-color: #e9e9e9;
+            text-align: center;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .phone-number {
+            flex: 1;
+        }
+        .error-message {
+            color: red;
+            font-size: 0.9em;
+            margin-top: -5px;
+            margin-bottom: 10px;
+            display: none;
+        }
+        .success-message {
+            color: green;
+            background-color: #e8f5e9;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            display: none;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .actions {
+            margin-top: 20px;
+        }
+        .actions a {
+            display: inline-block;
+            margin-right: 15px;
+            text-decoration: none;
+            color: #2c5e1a;
+            padding: 8px 12px;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        .actions a:hover {
+            background-color: #e0e0e0;
+        }
+        .source-info {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 30px;
+        }
+    </style>
+</head>
+<body>
+    <h1>AGRIVOICE: Notice & Audio Service</h1>
+    
+    <div id="registrationSuccess" class="success-message">
+        Farmer registered successfully! WhatsApp messages will be sent to this number when new notices are available.
+    </div>
+    
+    <h2>Register Farmer</h2>
+    <form action="/register" method="post" id="registerForm">
+        <input type="text" name="name" placeholder="Name" required>
+        
+        <div class="phone-input">
+            <div class="country-code">+91</div>
+            <input type="text" id="phone" name="phone" class="phone-number" placeholder="WhatsApp Number (10 digits)" required pattern="[6-9][0-9]{9}" maxlength="10">
+        </div>
+        <div id="phoneError" class="error-message">Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9</div>
+        
+        <input type="text" name="district" placeholder="District" required>
+        <button type="submit">Register</button>
+    </form>
+
+    <h2>Send New Notice</h2>
+    <form action="/generate" method="post">
+        <textarea name="notice" placeholder="Type notice here..." rows="5" cols="50" required></textarea><br>
+        <button type="submit">Send Notice Audio</button>
+    </form>
+
+    <div class="actions">
+        <a href="/archive">View Notice Archive</a>
+        <a href="/scrape-now">Fetch Latest Notices Now</a>
+        <a href="/send-voice-notices-to-all">Send Voice Notes to All Farmers</a>
+    </div>
+
+    <div class="source-info">
+        <p>This service automatically fetches agricultural notices from <a href="https://agriwelfare.gov.in/en/Recent" target="_blank">agriwelfare.gov.in</a> every 6 hours and sends them as voice notes to registered farmers.</p>
+    </div>
+
+    <script>
+        document.getElementById('registerForm').addEventListener('submit', function(event) {
+            const phoneInput = document.getElementById('phone');
+            const phoneError = document.getElementById('phoneError');
+            
+            // Indian mobile number validation (10 digits starting with 6, 7, 8, or 9)
+            const phoneRegex = /^[6-9][0-9]{9}$/;
+            
+            if (!phoneRegex.test(phoneInput.value)) {
+                phoneError.style.display = 'block';
+                event.preventDefault();
+            } else {
+                // Add +91 prefix to the phone number before submission
+                phoneInput.value = "+91" + phoneInput.value;
+                phoneError.style.display = 'none';
+                
+                // Show success message after successful form submission
+                localStorage.setItem('registrationSuccess', 'true');
+            }
+        });
+
+        // Show validation message on input
+        document.getElementById('phone').addEventListener('input', function() {
+            const phoneInput = this;
+            const phoneError = document.getElementById('phoneError');
+            const phoneRegex = /^[6-9][0-9]{9}$/;
+            
+            if (phoneInput.value.length > 0 && !phoneRegex.test(phoneInput.value)) {
+                phoneError.style.display = 'block';
+            } else {
+                phoneError.style.display = 'none';
+            }
+        });
+        
+        // Check if we need to show the success message
+        window.onload = function() {
+            if (localStorage.getItem('registrationSuccess') === 'true') {
+                document.getElementById('registrationSuccess').style.display = 'block';
+                localStorage.removeItem('registrationSuccess');
+                
+                // Hide the success message after 5 seconds
+                setTimeout(function() {
+                    document.getElementById('registrationSuccess').style.display = 'none';
+                }, 5000);
+            }
+        };
+    </script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+Flask
+gTTS
+twilio
+requests
+beautifulsoup4
+schedule
+pyngrok
+python-dotenv
