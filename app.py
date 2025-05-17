@@ -23,12 +23,22 @@ app.config['FARMERS_FILE'] = 'farmers.json'
 app.config['NOTICES_FILE'] = 'notices.json'
 app.config['LAST_SCRAPE_FILE'] = 'last_scrape.json'
 
-# Import credentials from environment variables
-import os
-account_sid = os.environ.get('TWILIO_ACCOUNT_SID', '')
-auth_token = os.environ.get('TWILIO_AUTH_TOKEN', '')
-whatsapp_number = os.environ.get('TWILIO_WHATSAPP_NUMBER', 'whatsapp:+14155238886')
-server_url = os.environ.get('SERVER_URL', 'http://localhost:5000')
+# Import credentials from config file
+try:
+    from config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER, SERVER_URL, NGROK_AUDIO_URL
+    account_sid = TWILIO_ACCOUNT_SID
+    auth_token = TWILIO_AUTH_TOKEN
+    whatsapp_number = TWILIO_WHATSAPP_NUMBER
+    server_url = SERVER_URL
+    ngrok_audio_url = NGROK_AUDIO_URL
+except ImportError:
+    # Fallback to environment variables or defaults
+    import os
+    account_sid = os.environ.get('TWILIO_ACCOUNT_SID', '')
+    auth_token = os.environ.get('TWILIO_AUTH_TOKEN', '')
+    whatsapp_number = os.environ.get('TWILIO_WHATSAPP_NUMBER', 'whatsapp:+14155238886')
+    server_url = os.environ.get('SERVER_URL', 'http://localhost:5000')
+    ngrok_audio_url = "https://6a4f-2409-40d0-12e7-b690-ad0d-cc77-f41e-13cf.ngrok-free.app/audio"
 
 # This will be updated when the app starts
 def update_server_url():
@@ -350,13 +360,31 @@ def schedule_scraper():
         schedule.run_pending()
         time.sleep(60)
 
-# Start scraper in background thread
+# Schedule automatic sending of audio files every day
+def schedule_audio_sender():
+    """
+    Run the audio sender every day at 9 AM
+    """
+    schedule.every().day.at("09:00").do(send_recent_audio_to_all_farmers)
+    logging.info("Audio sender scheduler started")
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+# Start background threads
 scraper_thread = threading.Thread(target=schedule_scraper, daemon=True)
 scraper_thread.start()
 
+audio_sender_thread = threading.Thread(target=schedule_audio_sender, daemon=True)
+audio_sender_thread.start()
+
 @app.before_first_request
-def initial_scrape():
+def initial_tasks():
+    # Start initial scrape
     threading.Thread(target=scrape_notices, daemon=True).start()
+    
+    # Send recent audio files to all farmers on startup
+    threading.Thread(target=send_recent_audio_to_all_farmers, daemon=True).start()
 
 @app.route('/')
 def index():
@@ -474,8 +502,46 @@ def send_voice_notices_to_all():
     """
     Manually send voice notes of the latest 3 notices to all farmers
     """
+    logging.info("Manual trigger: Sending voice notices to all farmers")
     threading.Thread(target=send_voice_notices_to_all_farmers, daemon=True).start()
     return "Sending voice notices to all farmers..."
+
+@app.route('/direct-send-audio/<phone>')
+def direct_send_audio(phone):
+    """
+    Directly send audio files to a specific phone number for testing
+    """
+    logging.info(f"Direct audio test to phone: {phone}")
+    
+    # Get 3 most recent audio files
+    audio_files = []
+    for file in os.listdir(app.config['UPLOAD_FOLDER']):
+        if file.endswith('.mp3'):
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], file)
+            audio_files.append({
+                'filename': file,
+                'path': file_path,
+                'created': os.path.getctime(file_path)
+            })
+    
+    audio_files.sort(key=lambda x: x['created'], reverse=True)
+    recent_files = audio_files[:3]
+    
+    if not recent_files:
+        return "No audio files found"
+    
+    # Send test message
+    send_whatsapp_message(phone, "Test audio message")
+    
+    # Send each audio file
+    for i, audio in enumerate(recent_files):
+        media_url = f"{ngrok_audio_url}/{audio['filename']}"
+        message = f"Test audio file {i+1}/3"
+        result = send_whatsapp_message(phone, message, media_url)
+        logging.info(f"Sent audio file {i+1} to {phone}: {result}")
+        time.sleep(3)
+    
+    return f"Sent {len(recent_files)} audio files to {phone}"
 
 def broadcast_latest_notices():
     """
@@ -495,16 +561,183 @@ def send_top_notices_all():
     threading.Thread(target=broadcast_latest_notices, daemon=True).start()
     return "Started sending top 3 notices to all farmers."
 
+@app.route('/send-recent-audio-files')
+def send_recent_audio_files():
+    """
+    Send the 3 most recent audio files directly to all farmers
+    """
+    threading.Thread(target=send_recent_audio_to_all_farmers, daemon=True).start()
+    return "Started sending recent audio files to all farmers."
+
+def send_recent_audio_to_all_farmers():
+    """
+    Sends the 3 most recent audio files in static/audio to all farmers
+    """
+    try:
+        logging.info("Starting to send recent audio files to all farmers")
+        
+        # Get all audio files from static/audio directory
+        audio_files = []
+        for file in os.listdir(app.config['UPLOAD_FOLDER']):
+            if file.endswith('.mp3'):
+                file_path = os.path.join(app.config['UPLOAD_FOLDER'], file)
+                audio_files.append({
+                    'filename': file,
+                    'path': file_path,
+                    'created': os.path.getctime(file_path)
+                })
+        
+        # Sort by creation time (newest first)
+        audio_files.sort(key=lambda x: x['created'], reverse=True)
+        
+        # Get the 3 most recent files
+        recent_files = audio_files[:3]
+        
+        if not recent_files:
+            logging.warning("No audio files found to send")
+            return
+        
+        logging.info(f"Found {len(recent_files)} recent audio files to send")
+        
+        # Get all farmers
+        with open(app.config['FARMERS_FILE'], 'r') as f:
+            farmers = json.load(f)
+        
+        if not farmers:
+            logging.warning("No farmers registered to send audio files to")
+            return
+        
+        logging.info(f"Sending audio files to {len(farmers)} farmers")
+        
+        # Create direct URL to the audio files using the public URL
+        public_url = request.url_root.rstrip('/') if request else "http://localhost:5000"
+        if 'ngrok' not in public_url and ngrok_audio_url:
+            # If not using ngrok URL in the request, use the configured one
+            public_url = ngrok_audio_url.rsplit('/', 1)[0]
+        
+        # Send audio files to each farmer
+        for farmer in farmers:
+            phone = farmer.get("phone")
+            name = farmer.get("name", "किसान मित्र")
+            
+            logging.info(f"Sending audio files to {name} at {phone}")
+            
+            # Send welcome message
+            welcome_message = f"नमस्ते {name}! यहां आपके लिए नवीनतम कृषि ऑडियो फ़ाइलें हैं:"
+            send_result = send_whatsapp_message(phone, welcome_message)
+            
+            if not send_result:
+                logging.error(f"Failed to send welcome message to {phone}, skipping this farmer")
+                continue
+            
+            # Send each audio file
+            for i, audio in enumerate(recent_files):
+                # Create full URL for the audio file
+                media_url = f"{public_url}/audio/{audio['filename']}"
+                logging.info(f"Sending audio file: {media_url}")
+                
+                message = f"ऑडियो फ़ाइल {i+1}/3"
+                result = send_whatsapp_message(phone, message, media_url)
+                if result:
+                    logging.info(f"Successfully sent audio file {i+1} to {phone}")
+                else:
+                    logging.error(f"Failed to send audio file {i+1} to {phone}")
+                time.sleep(3)  # Increased delay between messages
+            
+            logging.info(f"Sent {len(recent_files)} audio files to {name} at {phone}")
+            time.sleep(2)  # Increased delay between farmers
+        
+        logging.info(f"Finished sending audio files to {len(farmers)} farmers")
+    except Exception as e:
+        logging.error(f"Error sending audio files: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+
 @app.route('/audio')
-def send_audio():
-    return send_file("notice_20250511220711.mp3", mimetype="audio/mpeg")
+def audio_index():
+    """List all available audio files"""
+    files = []
+    for file in os.listdir(app.config['UPLOAD_FOLDER']):
+        if file.endswith('.mp3'):
+            files.append(file)
+    
+    files_html = "<br>".join([f'<a href="/audio/{file}">{file}</a>' for file in files])
+    return f"""
+    <h1>Available Audio Files</h1>
+    {files_html}
+    <hr>
+    <h2>Test Audio Sending</h2>
+    <form action="/test-audio-send" method="post">
+        <label>Phone Number (with country code): <input type="text" name="phone" value="+917739006104"></label><br>
+        <input type="submit" value="Send Test Audio">
+    </form>
+    """
+
+@app.route('/audio/<filename>')
+def send_audio(filename):
+    """Serve a specific audio file"""
+    return send_file(os.path.join(app.config['UPLOAD_FOLDER'], filename), mimetype="audio/mpeg")
 
 @app.route('/test-message')
 def test_message():
     # Use a placeholder phone number
-    test_phone = os.environ.get('TEST_PHONE', '+910000000000')
-    send_whatsapp_message(test_phone, 'यह एक परीक्षण संदेश है')
-    return 'Sent test message'
+    test_phone = os.environ.get('TEST_PHONE', '+917739006104')  # Using a real number from farmers.json
+    result = send_whatsapp_message(test_phone, 'यह एक परीक्षण संदेश है')
+    if result:
+        return 'Sent test message successfully'
+    else:
+        return 'Failed to send test message, check logs'
+
+@app.route('/test-audio-send', methods=['POST'])
+def test_audio_send():
+    """Test endpoint to send a single audio file to a specific number"""
+    phone = request.form.get('phone', '+917739006104')
+    
+    # Get the most recent audio file
+    audio_files = []
+    for file in os.listdir(app.config['UPLOAD_FOLDER']):
+        if file.endswith('.mp3'):
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], file)
+            audio_files.append({
+                'filename': file,
+                'path': file_path,
+                'created': os.path.getctime(file_path)
+            })
+    
+    if not audio_files:
+        return "No audio files found to send"
+    
+    # Sort by creation time (newest first)
+    audio_files.sort(key=lambda x: x['created'], reverse=True)
+    audio = audio_files[0]
+    
+    # Create direct URL to the audio file
+    public_url = request.url_root.rstrip('/')
+    if 'ngrok' not in public_url:
+        # If not using ngrok URL, use the configured one
+        public_url = ngrok_audio_url.rsplit('/', 1)[0]
+    
+    media_url = f"{public_url}/audio/{audio['filename']}"
+    logging.info(f"Testing with media URL: {media_url}")
+    
+    # Send the audio file
+    result = send_whatsapp_message(phone, f"Test audio file: {audio['filename']}", media_url)
+    
+    if result:
+        return f"""
+        <h1>Audio Test Sent</h1>
+        <p>Sent audio file <strong>{audio['filename']}</strong> to <strong>{phone}</strong></p>
+        <p>Media URL: <a href="{media_url}" target="_blank">{media_url}</a></p>
+        <p>Check your WhatsApp to see if you received it.</p>
+        <p><a href="/audio">Back to audio list</a></p>
+        """
+    else:
+        return f"""
+        <h1>Failed to Send Audio</h1>
+        <p>Failed to send audio file <strong>{audio['filename']}</strong> to <strong>{phone}</strong></p>
+        <p>Check the logs for more details.</p>
+        <p><a href="/audio">Back to audio list</a></p>
+        """
 
 if __name__ == "__main__":
     # Load environment variables
